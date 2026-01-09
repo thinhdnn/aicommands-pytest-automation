@@ -1,0 +1,30 @@
+{
+  "language": "en",
+  "locale": "en-US",
+  "base_url": "",
+  "api_config": {
+    "base_url": ""
+  },
+  "timeouts": {
+    "default": 10000,
+    "page_load": 30000,
+    "element_wait": 5000,
+    "api_request": 15000
+  },
+  "browser_config": {
+    "headless": false,
+    "slow_mo": 0,
+    "ignore_https_errors": true,
+    "locale": "en-US",
+    "timezone": "UTC",
+    "viewport": {
+      "width": 1920,
+      "height": 1080
+    },
+    "video_recording": false,
+    "screenshot_on_failure": true
+  },
+  "test_users": {},
+  "ui_texts": {},
+  "features": {}
+}
