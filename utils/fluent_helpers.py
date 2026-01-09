@@ -3,7 +3,7 @@
 Provides a fluent API for writing tests in a natural, readable manner.
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, List, Union
 from playwright.sync_api import Page, Locator, expect
 import time
 
@@ -52,6 +52,21 @@ class FluentAction:
     def __init__(self, page: Page):
         self.page = page
         self.steps = []
+
+    def _resolve_selector(self, selector: Union[str, List[str]], timeout: int = 3000, state: str = "attached") -> str:
+        """Resolve a single selector from a list of candidates by trying each in order.
+        Returns the first selector that is found within the timeout.
+        """
+        if isinstance(selector, str):
+            return selector
+        for candidate in selector:
+            try:
+                self.page.wait_for_selector(candidate, timeout=timeout, state=state)
+                return candidate
+            except Exception:
+                continue
+        # Fallback to the first for debuggability if none matched
+        return selector[0]
     
     def navigate_to(self, url: str) -> 'FluentAction':
         """Navigate to specified URL"""
@@ -59,24 +74,27 @@ class FluentAction:
         self.steps.append(f"Navigated to {url}")
         return self
     
-    def fill_field(self, selector: str, value: str, description: str = "") -> 'FluentAction':
+    def fill_field(self, selector: Union[str, List[str]], value: str, description: str = "") -> 'FluentAction':
         """Fill input field with value"""
-        self.page.fill(selector, value)
-        step_desc = description or f"Filled field {selector} with '{value}'"
+        resolved = self._resolve_selector(selector)
+        self.page.fill(resolved, value)
+        step_desc = description or f"Filled field {resolved} with '{value}'"
         self.steps.append(step_desc)
         return self
     
-    def click_element(self, selector: str, description: str = "") -> 'FluentAction':
+    def click_element(self, selector: Union[str, List[str]], description: str = "") -> 'FluentAction':
         """Click on element"""
-        self.page.click(selector)
-        step_desc = description or f"Clicked element {selector}"
+        resolved = self._resolve_selector(selector)
+        self.page.click(resolved)
+        step_desc = description or f"Clicked element {resolved}"
         self.steps.append(step_desc)
         return self
     
-    def wait_for_element(self, selector: str, timeout: int = 10000, description: str = "") -> 'FluentAction':
+    def wait_for_element(self, selector: Union[str, List[str]], timeout: int = 10000, description: str = "") -> 'FluentAction':
         """Wait for element to be visible"""
-        self.page.wait_for_selector(selector, timeout=timeout)
-        step_desc = description or f"Waited for element {selector}"
+        resolved = self._resolve_selector(selector, timeout=min(3000, timeout), state="visible")
+        self.page.wait_for_selector(resolved, timeout=timeout)
+        step_desc = description or f"Waited for element {resolved}"
         self.steps.append(step_desc)
         return self
     
@@ -86,24 +104,27 @@ class FluentAction:
         self.steps.append("Waited for page loading to complete")
         return self
     
-    def clear_field(self, selector: str, description: str = "") -> 'FluentAction':
+    def clear_field(self, selector: Union[str, List[str]], description: str = "") -> 'FluentAction':
         """Clear input field"""
-        self.page.fill(selector, "")
-        step_desc = description or f"Cleared field {selector}"
+        resolved = self._resolve_selector(selector)
+        self.page.fill(resolved, "")
+        step_desc = description or f"Cleared field {resolved}"
         self.steps.append(step_desc)
         return self
     
-    def hover_element(self, selector: str, description: str = "") -> 'FluentAction':
+    def hover_element(self, selector: Union[str, List[str]], description: str = "") -> 'FluentAction':
         """Hover over element"""
-        self.page.hover(selector)
-        step_desc = description or f"Hovered over {selector}"
+        resolved = self._resolve_selector(selector)
+        self.page.hover(resolved)
+        step_desc = description or f"Hovered over {resolved}"
         self.steps.append(step_desc)
         return self
     
-    def select_option(self, selector: str, value: str, description: str = "") -> 'FluentAction':
+    def select_option(self, selector: Union[str, List[str]], value: str, description: str = "") -> 'FluentAction':
         """Select option from dropdown"""
-        self.page.select_option(selector, value)
-        step_desc = description or f"Selected '{value}' from {selector}"
+        resolved = self._resolve_selector(selector)
+        self.page.select_option(resolved, value)
+        step_desc = description or f"Selected '{value}' from {resolved}"
         self.steps.append(step_desc)
         return self
     
@@ -126,9 +147,19 @@ class FluentValidator:
         self.page = page
         self.validations = []
     
-    def element(self, selector: str, description: str = "") -> FluentAssertion:
+    def element(self, selector: Union[str, List[str]], description: str = "") -> FluentAssertion:
         """Get fluent assertion for element"""
-        locator = self.page.locator(selector)
+        if isinstance(selector, list):
+            for candidate in selector:
+                try:
+                    self.page.wait_for_selector(candidate, timeout=2000)
+                    locator = self.page.locator(candidate)
+                    return FluentAssertion(locator, description)
+                except Exception:
+                    continue
+            locator = self.page.locator(selector[0])
+        else:
+            locator = self.page.locator(selector)
         return FluentAssertion(locator, description)
     
     def url_should_contain(self, text: str) -> 'FluentValidator':
@@ -225,14 +256,32 @@ def fluent_test(page: Page, test_name: str = "") -> FluentTest:
 
 
 # Helper functions for backward compatibility and ease of use
-def assert_element_visible(page: Page, selector: str, timeout: int = 10000):
+def assert_element_visible(page: Page, selector: Union[str, List[str]], timeout: int = 10000):
     """Helper function for simple element visibility assertion"""
-    expect(page.locator(selector)).to_be_visible(timeout=timeout)
+    if isinstance(selector, list):
+        for candidate in selector:
+            try:
+                expect(page.locator(candidate)).to_be_visible(timeout=2000)
+                return
+            except Exception:
+                continue
+        expect(page.locator(selector[0])).to_be_visible(timeout=timeout)
+    else:
+        expect(page.locator(selector)).to_be_visible(timeout=timeout)
 
 
-def assert_element_contains_text(page: Page, selector: str, text: str, timeout: int = 10000):
+def assert_element_contains_text(page: Page, selector: Union[str, List[str]], text: str, timeout: int = 10000):
     """Helper function for text assertion"""
-    expect(page.locator(selector)).to_contain_text(text, timeout=timeout)
+    if isinstance(selector, list):
+        for candidate in selector:
+            try:
+                expect(page.locator(candidate)).to_contain_text(text, timeout=2000)
+                return
+            except Exception:
+                continue
+        expect(page.locator(selector[0])).to_contain_text(text, timeout=timeout)
+    else:
+        expect(page.locator(selector)).to_contain_text(text, timeout=timeout)
 
 
 def assert_url_contains(page: Page, text: str):
