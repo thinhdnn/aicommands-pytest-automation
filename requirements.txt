@@ -29,3 +29,6 @@ black>=23.0.0        # Code formatting
 flake8>=6.0.0        # Linting
 mypy>=1.0.0          # Type checking
 pre-commit>=3.0.0    # Git hooks
+
+# Test case documentation generation
+openpyxl>=3.1.2      # For scripts/generate_test_cases.py
