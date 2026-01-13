@@ -1,8 +1,9 @@
 import ast
 import os
+import re
 from pathlib import Path
-from datetime import datetime
-from typing import List, Dict
+from datetime import datetime, timezone
+from typing import List, Dict, Tuple, Optional
 
 from openpyxl import Workbook
 from openpyxl import load_workbook
@@ -24,14 +25,14 @@ class TestStep:
 class TestCase:
     def __init__(
         self,
-        tc_id: str,
+        tc_id: Optional[str],
         feature: str,
         scenario: str,
         test_type: str,
         source: str,
         markers: List[str],
     ):
-        self.tc_id = tc_id
+        self.tc_id: Optional[str] = tc_id  # Will be assigned as TC-xxxx format during Excel generation
         self.feature = feature
         self.scenario = scenario
         self.test_type = test_type
@@ -64,7 +65,9 @@ class TestVisitor(ast.NodeVisitor):
         test_type = "UI" if "ui" in markers else "API"
         feature = markers[1] if len(markers) > 1 else "generated"
 
-        tc_id = f"{feature.upper()}_{node.name.upper()}"
+        # TC_ID will be assigned later in write_excel based on TC-xxxx format
+        # Use temporary identifier based on source + scenario for matching
+        tc_id = None  # Will be assigned during Excel generation
         # Compute source path relative to the tests root for cleaner reporting
         try:
             relative_source = self.file_path.relative_to(self.tests_root)
@@ -72,8 +75,9 @@ class TestVisitor(ast.NodeVisitor):
             # Fallback: if file is unexpectedly outside tests_root, use basename
             relative_source = self.file_path.name
 
+        # Create TestCase with None TC_ID initially - will be assigned in write_excel
         self.current_test = TestCase(
-            tc_id=tc_id,
+            tc_id=None,  # Will be assigned as TC-xxxx format
             feature=feature,
             scenario=node.name,
             test_type=test_type,
@@ -92,14 +96,33 @@ class TestVisitor(ast.NodeVisitor):
         if not self.current_test:
             return
 
-        # test.step("...")
+        # test.step("...", expected="...")
         if (
             isinstance(node.func, ast.Attribute)
             and node.func.attr == "step"
             and node.args
             and isinstance(node.args[0], ast.Constant)
         ):
-            self.pending_step = node.args[0].value
+            description = node.args[0].value
+            expected = None
+            
+            # Check for expected keyword argument
+            for keyword in node.keywords:
+                if keyword.arg == "expected" and isinstance(keyword.value, ast.Constant):
+                    expected = keyword.value.value
+                    break
+            
+            if expected:
+                # If expected is provided as keyword arg, create step immediately
+                self.current_test.steps.append(
+                    TestStep(
+                        action=description,
+                        expected=expected,
+                    )
+                )
+            else:
+                # Otherwise, store as pending step for .expect() chaining
+                self.pending_step = description
 
         # .expect("...")
         if (
@@ -138,6 +161,107 @@ def collect_test_cases(test_root: Path) -> List[TestCase]:
 
 
 # =========================
+# Assign TC IDs
+# =========================
+
+def assign_tc_ids_to_cases(cases: List[TestCase], excel_output: Path) -> None:
+    """Assign TC-xxxx format IDs to all test cases.
+    
+    Reads existing Excel file to preserve existing TC IDs and assign new ones sequentially.
+    """
+    def read_existing_mapping(path: Path) -> Tuple[Dict[str, Dict[str, object]], Dict[Tuple[str, str], str]]:
+        """Read existing TestCases sheet and return mappings."""
+        if not path.exists():
+            return {}, {}
+
+        try:
+            existing_wb = load_workbook(path)
+        except Exception:
+            return {}, {}
+
+        if "TestCases" not in existing_wb.sheetnames:
+            return {}, {}
+
+        existing_ws = existing_wb["TestCases"]
+        if existing_ws.max_row < 2:
+            return {}, {}
+
+        existing_headers: List[str] = []
+        for cell in existing_ws[1]:
+            existing_headers.append(str(cell.value).strip() if cell.value is not None else "")
+
+        header_to_col: Dict[str, int] = {
+            h: i + 1 for i, h in enumerate(existing_headers) if h
+        }
+        tc_col = header_to_col.get("TC_ID")
+        source_col = header_to_col.get("Automation Source")
+        scenario_col = header_to_col.get("Scenario (function)")
+        
+        if not tc_col:
+            return {}, {}
+
+        rows: Dict[str, Dict[str, object]] = {}
+        source_scenario_map: Dict[Tuple[str, str], str] = {}
+        
+        for r in range(2, existing_ws.max_row + 1):
+            raw_tc_id = existing_ws.cell(row=r, column=tc_col).value
+            if raw_tc_id is None:
+                continue
+            tc_id = str(raw_tc_id).strip()
+            if not tc_id:
+                continue
+
+            row_dict: Dict[str, object] = {}
+            for h, c in header_to_col.items():
+                row_dict[h] = existing_ws.cell(row=r, column=c).value
+            
+            rows[tc_id] = row_dict
+            
+            # Build source + scenario mapping
+            if source_col and scenario_col:
+                raw_source = existing_ws.cell(row=r, column=source_col).value
+                raw_scenario = existing_ws.cell(row=r, column=scenario_col).value
+                if raw_source and raw_scenario:
+                    # Normalize source: remove "tests/" prefix if present
+                    source = str(raw_source).replace("tests/", "").strip()
+                    scenario = str(raw_scenario).strip()
+                    source_scenario_map[(source, scenario)] = tc_id
+
+        return rows, source_scenario_map
+
+    existing_rows, source_scenario_map = read_existing_mapping(excel_output)
+    
+    # Calculate max TC number from existing rows once (only count TC-xxxx format)
+    max_tc_number = 0
+    for existing_tc_id in existing_rows.keys():
+        tc_num = extract_tc_number(existing_tc_id)
+        if tc_num is not None:
+            max_tc_number = max(max_tc_number, tc_num)
+    
+    # Assign TC IDs to all test cases
+    next_available_number = max_tc_number + 1
+    for tc in cases:
+        key = (tc.source, tc.scenario)
+        if key in source_scenario_map:
+            # Check if existing TC ID is in TC-xxxx format
+            existing_tc_id = source_scenario_map[key]
+            if extract_tc_number(existing_tc_id) is not None:
+                # Use existing TC ID if it's already in TC-xxxx format
+                tc.tc_id = existing_tc_id
+            else:
+                # Existing TC ID is in old format, assign new TC-xxxx ID
+                tc.tc_id = f"TC-{next_available_number:04d}"
+                source_scenario_map[key] = tc.tc_id
+                next_available_number += 1
+        else:
+            # Assign new TC ID
+            tc.tc_id = f"TC-{next_available_number:04d}"
+            # Update mapping to avoid duplicates
+            source_scenario_map[key] = tc.tc_id
+            next_available_number += 1
+
+
+# =========================
 # Markdown output
 # =========================
 
@@ -173,27 +297,34 @@ def write_markdown(cases: List[TestCase], output: Path):
 # Excel output
 # =========================
 
-def write_excel(cases: List[TestCase], output: Path):
-    def read_existing_rows_by_tc_id(path: Path) -> Dict[str, Dict[str, object]]:
-        """Read existing TestCases sheet and return a mapping TC_ID -> row dict.
+def extract_tc_number(tc_id: str) -> Optional[int]:
+    """Extract numeric part from TC-xxxx format. Returns None if format doesn't match."""
+    match = re.match(r"^TC-(\d+)$", str(tc_id).strip())
+    if match:
+        return int(match.group(1))
+    return None
 
-        This is used to preserve manual fields (Priority/Status/Owner/etc.) across regenerations
-        while still updating auto-generated fields (Steps/Expected/Markers/Source).
+
+def write_excel(cases: List[TestCase], output: Path):
+    def read_existing_rows_by_tc_id(path: Path) -> Tuple[Dict[str, Dict[str, object]], Dict[Tuple[str, str], str]]:
+        """Read existing TestCases sheet and return:
+        1. Mapping TC_ID -> row dict (for preserving manual fields)
+        2. Mapping (source, scenario) -> TC_ID (for matching test cases)
         """
         if not path.exists():
-            return {}
+            return {}, {}
 
         try:
             existing_wb = load_workbook(path)
         except Exception:
-            return {}
+            return {}, {}
 
         if "TestCases" not in existing_wb.sheetnames:
-            return {}
+            return {}, {}
 
         existing_ws = existing_wb["TestCases"]
         if existing_ws.max_row < 2:
-            return {}
+            return {}, {}
 
         existing_headers: List[str] = []
         for cell in existing_ws[1]:
@@ -203,10 +334,15 @@ def write_excel(cases: List[TestCase], output: Path):
             h: i + 1 for i, h in enumerate(existing_headers) if h
         }
         tc_col = header_to_col.get("TC_ID")
+        source_col = header_to_col.get("Automation Source")
+        scenario_col = header_to_col.get("Scenario (function)")
+        
         if not tc_col:
-            return {}
+            return {}, {}
 
         rows: Dict[str, Dict[str, object]] = {}
+        source_scenario_map: Dict[Tuple[str, str], str] = {}
+        
         for r in range(2, existing_ws.max_row + 1):
             raw_tc_id = existing_ws.cell(row=r, column=tc_col).value
             if raw_tc_id is None:
@@ -218,11 +354,24 @@ def write_excel(cases: List[TestCase], output: Path):
             row_dict: Dict[str, object] = {}
             for h, c in header_to_col.items():
                 row_dict[h] = existing_ws.cell(row=r, column=c).value
+            
             rows[tc_id] = row_dict
+            
+            # Build source + scenario mapping
+            if source_col and scenario_col:
+                raw_source = existing_ws.cell(row=r, column=source_col).value
+                raw_scenario = existing_ws.cell(row=r, column=scenario_col).value
+                if raw_source and raw_scenario:
+                    # Normalize source: remove "tests/" prefix if present
+                    source = str(raw_source).replace("tests/", "").strip()
+                    scenario = str(raw_scenario).strip()
+                    source_scenario_map[(source, scenario)] = tc_id
 
-        return rows
+        return rows, source_scenario_map
 
-    existing_rows = read_existing_rows_by_tc_id(output)
+    # TC IDs should already be assigned by assign_tc_ids_to_cases()
+    # But we still need to read existing rows for preserving manual fields
+    existing_rows, _ = read_existing_rows_by_tc_id(output)
 
     wb = Workbook()
 
@@ -253,7 +402,7 @@ def write_excel(cases: List[TestCase], output: Path):
     ]
     ws.append(headers)
 
-    timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
+    timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
     manual_columns = {
         "Priority",
@@ -267,6 +416,22 @@ def write_excel(cases: List[TestCase], output: Path):
     generated_tc_ids: set[str] = set()
 
     for tc in cases:
+        # Ensure TC_ID is assigned (should be done above, but double-check)
+        if not tc.tc_id:
+            # Fallback: assign new TC ID if somehow missing
+            max_tc_number = 0
+            for existing_tc_id in existing_rows.keys():
+                tc_num = extract_tc_number(existing_tc_id)
+                if tc_num is not None:
+                    max_tc_number = max(max_tc_number, tc_num)
+            for other_tc in cases:
+                if other_tc.tc_id:
+                    tc_num = extract_tc_number(other_tc.tc_id)
+                    if tc_num is not None:
+                        max_tc_number = max(max_tc_number, tc_num)
+            next_tc_number = max_tc_number + 1
+            tc.tc_id = f"TC-{next_tc_number:04d}"
+        
         steps = "\n".join(f"{i+1}. {s.action}" for i, s in enumerate(tc.steps))
         expected = "\n".join(f"{i+1}. {s.expected}" for i, s in enumerate(tc.steps))
         title = tc.scenario.replace("_", " ").strip().title()
@@ -627,9 +792,14 @@ def main():
 
     docs = root / "docs"
     docs.mkdir(exist_ok=True)
+    
+    excel_output = docs / "test_cases.xlsx"
+    
+    # Assign TC IDs before writing output files
+    assign_tc_ids_to_cases(cases, excel_output)
 
     write_markdown(cases, docs / "test_cases.md")
-    write_excel(cases, docs / "test_cases.xlsx")
+    write_excel(cases, excel_output)
 
     print(f"Generated {len(cases)} test cases.")
 
