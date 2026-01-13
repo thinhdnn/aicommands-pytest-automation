@@ -231,6 +231,8 @@ class FluentAPITest:
         self.context = {}
         self.setup_actions = []
         self.test_actions = []
+        self._pending_step = None
+        self._pending_expected = None
         
     def given(self) -> 'FluentAPITest':
         """Start given context setup"""
@@ -239,6 +241,25 @@ class FluentAPITest:
     def when(self) -> FluentAPIRequest:
         """Start when action - return request builder"""
         return FluentAPIRequest(self.test_name)
+    
+    def step(self, description: str, expected: str = None) -> 'FluentAPITest':
+        """Document a test step with description and optional expected outcome"""
+        step_msg = f"Step: {description}"
+        if expected:
+            step_msg += f" | Expected: {expected}"
+        print(f"📋 {step_msg}")
+        self._pending_step = description
+        self._pending_expected = expected
+        return self
+    
+    def expect(self, expected: str) -> 'FluentAPITest':
+        """Chain expected outcome to a step"""
+        if hasattr(self, '_pending_step') and self._pending_step:
+            step_msg = f"Step: {self._pending_step} | Expected: {expected}"
+            print(f"📋 {step_msg}")
+            self._pending_step = None
+            self._pending_expected = None
+        return self
     
     def store_value(self, key: str, value: Any) -> 'FluentAPITest':
         """Store value in test context"""
