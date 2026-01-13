@@ -240,6 +240,25 @@ class FluentTest:
         print(f"📝 {message}")
         return self
     
+    def step(self, description: str, expected: str = None) -> 'FluentTest':
+        """Document a test step with description and optional expected outcome"""
+        step_msg = f"Step: {description}"
+        if expected:
+            step_msg += f" | Expected: {expected}"
+        print(f"📋 {step_msg}")
+        self._pending_step = description
+        self._pending_expected = expected
+        return self
+    
+    def expect(self, expected: str) -> 'FluentTest':
+        """Chain expected outcome to a step"""
+        if hasattr(self, '_pending_step') and self._pending_step:
+            step_msg = f"Step: {self._pending_step} | Expected: {expected}"
+            print(f"📋 {step_msg}")
+            self._pending_step = None
+            self._pending_expected = None
+        return self
+    
     def get_summary(self) -> dict:
         """Get test execution summary"""
         return {
