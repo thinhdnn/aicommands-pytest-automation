@@ -17,7 +17,6 @@ Use this command when the user provides a JSON array of UI actions like:
 …and asks you to generate a **complete, runnable UI test** for this repository.
 
 Do NOT use this command for:
-- API tests (use API-focused patterns)
 - Refactoring existing suites unrelated to the provided actions
 - Writing Page Object classes (forbidden in this repo)
 
@@ -32,39 +31,72 @@ Your goal is to produce **deterministic, maintainable tests** that follow the re
 
 ## Workflow (Non-Negotiable Order)
 
+### Step 0: Verify environment configuration
+Before touching the action list, read `data/environments/dev.json` and confirm it contains:
+- `base_url`
+- `api_config.base_url`
+- `test_users.admin` (including email + password)
+
+If any of these are missing or blank, stop and ask the user to update the JSON so the tests can run.
+
 ### Step 1: Validate and normalize input
-1. Parse the input as JSON.
-2. Assert it is a list of action objects.
-3. For each action object:
-   - Require `action` and `locators`.
+1. Determine the input type:
+   - **UI flow** → Expect a JSON array of action objects (each with `action` + `locators`).
+   - **API flow** → Expect a cURL snippet or structured HTTP description (method/URL/headers/body).
+2. For UI flows:
+   - Parse the JSON array and enforce the structure above.
    - Normalize `locators` by trimming whitespace and removing duplicates while keeping order.
-4. If any action has `redacted: true`:
+   - Treat the locator array as a **candidate pool**, then pick the clearest, least-brittle option as the primary selector (plus only necessary fallbacks). Never spray every locator into the test one-for-one.
+3. For API flows:
+   - Parse the cURL / HTTP details into method, path, headers, payload, and variables.
+   - Replace the literal host with `config.api_url` / `config.config["api_config"]["base_url"]`.
+   - Normalize headers/body so they can be fed into the Fluent API helpers.
+4. Redacted data (applies to both modes):
    - DO NOT inline the secret.
-   - Prefer `os.getenv("E2E_PASSWORD")` (or another explicit env var) in the generated test.
-   - If no env var name is provided, default to `E2E_PASSWORD`.
+   - Load the value from the active environment JSON via `from config.environment import config` (e.g., `config.test_users["admin"]["password"]`).
+   - Only fall back to `os.getenv(...)` if the JSON is missing that entry, defaulting to `E2E_PASSWORD` when no name is provided.
 
 ### Step 2: Decide target files (feature-based)
 1. Choose a feature name from the actions:
    - If you see login patterns (`username/password/login`), default feature: `auth`.
    - If you see dashboard breadcrumbs/route labels, default feature: `dashboard`.
    - If unclear, default feature: `generated`.
-2. Target paths:
-   - Locators: `locators/<feature>_locators.py`
-   - Test: `tests/features/test_<feature>_<scenario>.py`
+2. If the user input is a cURL command or otherwise describes HTTP payloads/headers (no UI locators), flip into **API mode**:
+   - Treat the feature as `api` (or derive a descriptive name from the endpoint)
+   - Use `config.api_url` / `config.config["api_config"]["base_url"]` as the default host for requests
+   - Reuse the Fluent API helpers under `utils/fluent_api.py`
+3. Target paths:
+    - UI flows:
+       - `locators/<feature>_locators.py` (simple selectors)
+       - optional `components/<feature>_components.py` (reusable widgets)
+       - tests under `tests/ui/test_<feature>_<scenario>.py`
+    - API flows:
+       - tests under `tests/api/test_<feature>_<scenario>.py` (no locator/component file needed)
 
-### Step 3: Build locator sets and dedupe across steps
-For each unique element referenced by the action list:
-1. Rank locators (best first):
+### Step 3: Build locators/components and dedupe across steps (UI flows only)
+Skip this step entirely for API inputs—continue with Step 4.
+
+For UI flows, evaluate each unique element or widget referenced by the action list:
+1. Decide whether it belongs in **locators** or **components**:
+   - Use `locators/<feature>_locators.py` for single DOM nodes (buttons, inputs, toast text, inline validation messages, etc.).
+   - Use `components/<feature>_components.py` when the interaction spans multiple selectors or represents a reusable widget, such as headers, footers, navigation menus, tab bars, data tables, worklists, wizards, modals, or complex cards. Components should subclass `components.base_component.BaseComponent` and expose descriptive methods.
+   - Examples:
+     - ✅ Component candidates: global header with user dropdown + notifications, pagination widget controlling next/previous buttons, worklist grid with row actions, persistent sidebar navigation.
+     - ✅ Locator-only: single “Submit” button, one-off informational tooltip, static badge text.
+2. When defining component internals, keep their underlying selectors private to the component; the test should call component methods, not raw locators.
+2. When defining component internals, keep their underlying selectors private to the component; the test should call component methods, not raw locators.
+3. For every raw selector you still need (either directly or inside a component), rank locators (best first):
    1) `[data-testid=...]`
    2) `[data-cy=...]` / other stable data attributes
    3) semantic text selectors (`text=...`)
    4) simple CSS (`#id`, `input[name=...]`)
    5) xpath (`xpath=...`) as last resort
-2. Choose a PRIMARY locator and an ordered FALLBACK list.
-3. Generate locator constants:
+4. Choose a PRIMARY locator and an ordered FALLBACK list.
+   - The PRIMARY should be the single most stable locator from the candidate pool. Only keep fallbacks that add real resiliency.
+5. Generate locator constants (for locators) or component attributes (for components):
    - `FOO = "<primary>"`
    - `FOO_FALLBACKS = [ ... ]`
-   - `FOO_LOCATORS = [FOO, *FOO_FALLBACKS]`
+   - `FOO_LOCATORS = [FOO, *FOO_FALLBACKS]` (a single-item list is fine if no fallbacks are needed).
 
 Never inline selectors in tests.
 
@@ -98,14 +130,28 @@ Rules:
 1. Add required markers:
    - `@pytest.mark.ui` (so autouse UI setup in `conftest.py` activates)
    - Add business markers if obvious (e.g., `auth`, `smoke`)
-2. Use Fluent helpers for navigation/waits:
-   - `test = fluent_test(page, "...")`
+2. **Test naming conventions (MANDATORY)**:
+   - **Test function names**: MUST start with `test_verify_` (e.g., `test_verify_user_can_login_successfully`, `test_verify_side_menu_is_visible_after_login`)
+   - **Test titles** (passed to `fluent_test()`): MUST start with "Verify" (e.g., `fluent_test(page, "Verify user can login successfully")`, `fluent_test(page, "Verify side menu appears after login")`)
+   - **Test docstrings**: Should describe what is being verified (e.g., `"""Verify that user can login successfully and see dashboard"""`)
+3. Use Fluent helpers for navigation/waits:
+   - `test = fluent_test(page, "Verify ...")` (title MUST start with "Verify")
    - `(test.given().navigate_to(config.base_url + "/path").wait_for_loading())`
-3. Use the runtime fallback helpers (do not duplicate loops):
-   - `from utils.ui_action_runner import click_first, fill_first, expect_text_first`
-4. Redacted inputs:
-   - Use `os.getenv("E2E_PASSWORD")` etc.
-   - If missing, `pytest.skip("...")` (deterministic and safe)
+4. Model each **business-relevant step** (UI or API) with `test.step(...)`:
+   - Step descriptions for verification steps SHOULD start with "Verify" (e.g., `test.step("Verify side menu is visible", expected="Side menu toggle appears")`)
+   - Action steps can use action verbs (e.g., `test.step("Enter username", expected="Username field is filled")`)
+   - `test.step("Verify side menu is visible", expected="Side menu toggle appears").then().element(SIDE_MENU_TOGGLE_LOCATORS, "Side menu toggle").should_be_visible()`
+   - `test.step("Create a new user", expected="API returns 201 Created").post("/users", json={"email": "test@example.com", "role": "admin"}).assert_status(201)` . Have step description, optional expected
+   - The `expected` argument is optional but preferred for documentation.
+   - Precondition helpers/fixtures (for example: login) **may contain their own `step(...)` calls internally**; in that case, the test body should not add a duplicate step for the same workflow, only for the business actions and verifications after the precondition.
+4. For UI actions, use the Fluent helpers for multi-locator robustness (no hand-rolled loops):
+   - Flow through `fluent_test`/`fluent_helpers` APIs and pass the curated `*_LOCATORS` lists wherever element interactions occur.
+   - Do **not** import or generate standalone helper modules—fallback handling is centralized in the Fluent layer.
+5. When a component exists for an interaction, use its methods inside the test instead of directly calling locators.
+6. For API actions, build deterministic flows with `from utils.fluent_api import fluent_api_test` (or related helpers), seeding endpoints off `config.api_url` / `config.config["api_config"]["base_url"]`.
+7. Redacted inputs:
+   - Prefer `config.test_users[...]` (or other fields inside the environment JSON) for secrets.
+   - Fall back to `os.getenv("E2E_PASSWORD")` (or the provided env var name) only if the JSON lacks that value; skip the test if still unavailable.
 
 ### Step 6: Self-check (must run mentally)
 Before final output, verify:
@@ -114,7 +160,21 @@ Before final output, verify:
 - [ ] English-only code comments
 - [ ] Imports at top; helper functions at end
 - [ ] Uses Fluent pattern for navigation/waits
-- [ ] Uses `utils/ui_action_runner.py` for multi-locator actions
+- [ ] Test function names start with `test_verify_`
+- [ ] Test titles (in `fluent_test()`) start with "Verify"
+
+### Step 7: Run and fix the tests
+1. Ensure `.venv/` exists. If not, run `python3 -m venv .venv` (no VS Code prompts).
+2. Install/refresh dependencies headlessly: `./.venv/bin/python -m pip install -r requirements.txt`.
+3. Run the exact test file you just created (UI → `tests/ui/...`, API → `tests/api/...`) using the venv interpreter, e.g. `./.venv/bin/python -m pytest tests/ui/test_<feature>_<scenario>.py`.
+4. If the run fails, fix the generated files and rerun the command until it passes. Do not deliver output until the new test succeeds locally.
+
+### Step 8: Document the test case for managers
+- Derive documentation strictly from `step(...)` definitions.
+- Regenerate both `docs/test_cases.md` 
+- Use `scripts/generate_test_cases.py` to generate the read-only `docs/test_cases.xlsx`.
+- Automation code remains the single source of truth.
+
 
 ## Tools (Mental Model)
 Pretend you can run:
@@ -132,13 +192,16 @@ These pseudo-tools are only to force structured, deterministic output.
 ## Rules
 - Do not guess secrets.
 - Do not invent non-existent helpers.
-- If a fixture/helper doesn’t exist, generate a minimal helper function.
+- If a fixture/helper doesn't exist, generate a minimal helper function.
 - Do not create Page Object classes.
 - Keep output deterministic: stable ordering, stable names.
+- **MANDATORY**: All test function names MUST start with `test_verify_` (e.g., `test_verify_user_login_workflow`).
+- **MANDATORY**: All test titles (passed to `fluent_test()`) MUST start with "Verify" (e.g., `fluent_test(page, "Verify user login workflow")`).
 
 ## Output Requirements
 When invoked, produce:
 1. A short bullet list of files you will create/update.
-2. The generated `locators/<feature>_locators.py` content.
-3. The generated `tests/features/test_<...>.py` content.
-4. A tiny “how to run” section.
+2. A `@locators` section containing the content for `locators/<feature>_locators.py` (omit/mark empty if not needed).
+3. A `@components` section containing any `components/<feature>_components.py` content (or explicitly state that no components were required).
+4. The generated test file content (`tests/ui/...` or `tests/api/...`).
+5. A tiny “how to run” section.

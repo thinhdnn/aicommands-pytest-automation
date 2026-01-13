@@ -130,15 +130,26 @@ Rules:
 1. Add required markers:
    - `@pytest.mark.ui` (so autouse UI setup in `conftest.py` activates)
    - Add business markers if obvious (e.g., `auth`, `smoke`)
-2. Use Fluent helpers for navigation/waits:
-   - `test = fluent_test(page, "...")`
+2. **Test naming conventions (MANDATORY)**:
+   - **Test function names**: MUST start with `test_verify_` (e.g., `test_verify_user_can_login_successfully`, `test_verify_side_menu_is_visible_after_login`)
+   - **Test titles** (passed to `fluent_test()`): MUST start with "Verify" (e.g., `fluent_test(page, "Verify user can login successfully")`, `fluent_test(page, "Verify side menu appears after login")`)
+   - **Test docstrings**: Should describe what is being verified (e.g., `"""Verify that user can login successfully and see dashboard"""`)
+3. Use Fluent helpers for navigation/waits:
+   - `test = fluent_test(page, "Verify ...")` (title MUST start with "Verify")
    - `(test.given().navigate_to(config.base_url + "/path").wait_for_loading())`
-3. For UI actions, use the Fluent helpers for multi-locator robustness (no hand-rolled loops):
+4. Model each **business-relevant step** (UI or API) with `test.step(...)`:
+   - Step descriptions for verification steps SHOULD start with "Verify" (e.g., `test.step("Verify side menu is visible", expected="Side menu toggle appears")`)
+   - Action steps can use action verbs (e.g., `test.step("Enter username", expected="Username field is filled")`)
+   - `test.step("Verify side menu is visible", expected="Side menu toggle appears").then().element(SIDE_MENU_TOGGLE_LOCATORS, "Side menu toggle").should_be_visible()`
+   - `test.step("Create a new user", expected="API returns 201 Created").post("/users", json={"email": "test@example.com", "role": "admin"}).assert_status(201)` . Have step description, optional expected
+   - The `expected` argument is optional but preferred for documentation.
+   - Precondition helpers/fixtures (for example: login) **may contain their own `step(...)` calls internally**; in that case, the test body should not add a duplicate step for the same workflow, only for the business actions and verifications after the precondition.
+4. For UI actions, use the Fluent helpers for multi-locator robustness (no hand-rolled loops):
    - Flow through `fluent_test`/`fluent_helpers` APIs and pass the curated `*_LOCATORS` lists wherever element interactions occur.
    - Do **not** import or generate standalone helper modules—fallback handling is centralized in the Fluent layer.
-4. When a component exists for an interaction, use its methods inside the test instead of directly calling locators.
-5. For API actions, build deterministic flows with `from utils.fluent_api import fluent_api_test` (or related helpers), seeding endpoints off `config.api_url` / `config.config["api_config"]["base_url"]`.
-6. Redacted inputs:
+5. When a component exists for an interaction, use its methods inside the test instead of directly calling locators.
+6. For API actions, build deterministic flows with `from utils.fluent_api import fluent_api_test` (or related helpers), seeding endpoints off `config.api_url` / `config.config["api_config"]["base_url"]`.
+7. Redacted inputs:
    - Prefer `config.test_users[...]` (or other fields inside the environment JSON) for secrets.
    - Fall back to `os.getenv("E2E_PASSWORD")` (or the provided env var name) only if the JSON lacks that value; skip the test if still unavailable.
 
@@ -149,6 +160,8 @@ Before final output, verify:
 - [ ] English-only code comments
 - [ ] Imports at top; helper functions at end
 - [ ] Uses Fluent pattern for navigation/waits
+- [ ] Test function names start with `test_verify_`
+- [ ] Test titles (in `fluent_test()`) start with "Verify"
 
 ### Step 7: Run and fix the tests
 1. Ensure `.venv/` exists. If not, run `python3 -m venv .venv` (no VS Code prompts).
@@ -157,13 +170,11 @@ Before final output, verify:
 4. If the run fails, fix the generated files and rerun the command until it passes. Do not deliver output until the new test succeeds locally.
 
 ### Step 8: Document the test case for managers
-1. Create `docs/test_cases.md` if it does not already exist.
-2. Add (or update) a section for the new scenario containing:
-   - Scenario name and feature
-   - Preconditions / test data references (e.g., which `test_users` entry)
-   - Step-by-step actions and expected results (mirror the scripted steps plus key assertions)
-   - Link to the generated pytest file and the command used to run it
-3. Keep the document organized by feature so managers can quickly audit coverage.
+- Derive documentation strictly from `step(...)` definitions.
+- Regenerate both `docs/test_cases.md` 
+- Use `scripts/generate_test_cases.py` to generate the read-only `docs/test_cases.xlsx`.
+- Automation code remains the single source of truth.
+
 
 ## Tools (Mental Model)
 Pretend you can run:
@@ -181,9 +192,11 @@ These pseudo-tools are only to force structured, deterministic output.
 ## Rules
 - Do not guess secrets.
 - Do not invent non-existent helpers.
-- If a fixture/helper doesn’t exist, generate a minimal helper function.
+- If a fixture/helper doesn't exist, generate a minimal helper function.
 - Do not create Page Object classes.
 - Keep output deterministic: stable ordering, stable names.
+- **MANDATORY**: All test function names MUST start with `test_verify_` (e.g., `test_verify_user_login_workflow`).
+- **MANDATORY**: All test titles (passed to `fluent_test()`) MUST start with "Verify" (e.g., `fluent_test(page, "Verify user login workflow")`).
 
 ## Output Requirements
 When invoked, produce:
