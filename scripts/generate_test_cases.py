@@ -9,7 +9,6 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
-from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
 # =========================
@@ -457,25 +456,28 @@ def write_excel(cases: List[TestCase], output: Path):
                 cell.alignment = plain_top
 
         # Hyperlink Automation Source to the file (relative from docs/)
+        # Use safer hyperlink handling to avoid Excel corruption
         source_cell = ws.cell(row=r, column=14)
         source_value = source_cell.value
         if isinstance(source_value, str) and source_value.startswith("tests/"):
-            source_cell.hyperlink = f"../{source_value}"
-            source_cell.font = Font(size=10, color="0563C1", underline="single")
+            try:
+                # Create a proper file path for hyperlink
+                file_path = Path(output.parent.parent) / source_value
+                if file_path.exists() and file_path.is_file():
+                    # Use file:// protocol for absolute path (Windows-compatible)
+                    abs_path = file_path.absolute().as_posix()
+                    # Excel prefers forward slashes even on Windows
+                    source_cell.hyperlink = f"file:///{abs_path}"
+                    source_cell.font = Font(size=10, color="0563C1", underline="single")
+                else:
+                    # File doesn't exist, just style as text (no hyperlink)
+                    source_cell.font = Font(size=10, color="0563C1")
+            except (Exception, OSError):
+                # If hyperlink creation fails, just style it as text
+                source_cell.font = Font(size=10, color="0563C1")
 
-    # Excel table styling - use a more modern style
-    if last_row >= 2:
-        table_ref = f"A1:{last_col_letter}{last_row}"
-        table = Table(displayName="TestCasesTable", ref=table_ref)
-        style = TableStyleInfo(
-            name="TableStyleLight9",
-            showFirstColumn=False,
-            showLastColumn=False,
-            showRowStripes=True,
-            showColumnStripes=False,
-        )
-        table.tableStyleInfo = style
-        ws.add_table(table)
+    # Note: Removed Excel table to avoid conflicts with manual formatting
+    # Auto-filter is already enabled above which provides filtering functionality
 
     # -------------------------
     # Summary sheet content - Enhanced formatting
