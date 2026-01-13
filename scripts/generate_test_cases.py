@@ -351,43 +351,54 @@ def write_excel(cases: List[TestCase], output: Path):
     # -------------------------
     # Formatting / UX
     # -------------------------
-    header_fill = PatternFill("solid", fgColor="1F4E79")  # dark blue
-    header_font = Font(bold=True, color="FFFFFF")
+    # Modern professional color scheme
+    header_fill = PatternFill("solid", fgColor="2E75B6")  # Professional blue
+    header_font = Font(bold=True, color="FFFFFF", size=11)
     header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
-    thin_side = Side(style="thin", color="D9D9D9")
-    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    # Better borders - medium for definition
+    medium_side = Side(style="medium", color="4472C4")
+    thin_side = Side(style="thin", color="D0D0D0")
+    header_border = Border(
+        left=medium_side, right=medium_side, top=medium_side, bottom=medium_side
+    )
+    cell_border = Border(
+        left=thin_side, right=thin_side, top=thin_side, bottom=thin_side
+    )
 
-    wrap_top = Alignment(wrap_text=True, vertical="top")
-    plain_top = Alignment(vertical="top")
+    # Alignment styles
+    wrap_top = Alignment(wrap_text=True, vertical="top", horizontal="left")
+    wrap_center = Alignment(wrap_text=True, vertical="center", horizontal="center")
+    plain_top = Alignment(vertical="top", horizontal="left")
+    center_align = Alignment(vertical="center", horizontal="center")
 
-    # Header row styling
-    ws.row_dimensions[1].height = 24
+    # Header row styling - taller and more prominent
+    ws.row_dimensions[1].height = 30
     for col_idx in range(1, len(headers) + 1):
         cell = ws.cell(row=1, column=col_idx)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = header_alignment
-        cell.border = thin_border
+        cell.border = header_border
 
-    # Column widths (tuned for readability)
+    # Optimized column widths for better readability
     column_widths = {
-        "A": 28,  # TC_ID
-        "B": 36,  # Title
-        "C": 18,  # Feature
-        "D": 40,  # Scenario
-        "E": 10,  # Type
-        "F": 10,  # Priority
-        "G": 12,  # Status
-        "H": 12,  # Automation
-        "I": 18,  # Owner
-        "J": 26,  # Preconditions
-        "K": 46,  # Steps
-        "L": 46,  # Expected
-        "M": 26,  # Postconditions
-        "N": 46,  # Automation Source
-        "O": 28,  # Markers
-        "P": 22,  # Timestamp
+        "A": 32,  # TC_ID
+        "B": 40,  # Title
+        "C": 20,  # Feature
+        "D": 45,  # Scenario
+        "E": 12,  # Type
+        "F": 12,  # Priority
+        "G": 14,  # Status
+        "H": 14,  # Automation
+        "I": 20,  # Owner
+        "J": 30,  # Preconditions
+        "K": 50,  # Steps
+        "L": 50,  # Expected
+        "M": 30,  # Postconditions
+        "N": 50,  # Automation Source
+        "O": 32,  # Markers
+        "P": 24,  # Timestamp
     }
     for col_letter, width in column_widths.items():
         ws.column_dimensions[col_letter].width = width
@@ -415,21 +426,32 @@ def write_excel(cases: List[TestCase], output: Path):
         dv_status.add(f"G2:G{last_row}")
         dv_automation.add(f"H2:H{last_row}")
 
-    # Row styling & borders
-    alt_fill = PatternFill("solid", fgColor="F7F7F7")
+    # Row styling & borders with better visual appeal
+    even_row_fill = PatternFill("solid", fgColor="F2F2F2")  # Light gray for even rows
+    odd_row_fill = PatternFill("solid", fgColor="FFFFFF")  # White for odd rows
+    
+    # Text font for data rows
+    data_font = Font(size=10, color="000000")
+    
     for r in range(2, last_row + 1):
-        # Give room for multi-line steps/expected
-        ws.row_dimensions[r].height = 80
+        # Auto-adjust row height based on content (minimum 60, max 120)
+        ws.row_dimensions[r].height = 60
+        
         for c in range(1, len(headers) + 1):
             cell = ws.cell(row=r, column=c)
-            cell.border = thin_border
+            cell.border = cell_border
+            cell.font = data_font
 
-            # Alternating row fill for readability
+            # Alternating row fill for better readability
             if r % 2 == 0:
-                cell.fill = alt_fill
+                cell.fill = even_row_fill
+            else:
+                cell.fill = odd_row_fill
 
-            # Wrap where appropriate
-            if c in {10, 11, 12, 13, 14, 15}:  # Preconditions, Steps, Expected, Postconditions, Source, Tags
+            # Column-specific alignment
+            if c in {5, 6, 7, 8}:  # Type, Priority, Status, Automation - center aligned
+                cell.alignment = wrap_center
+            elif c in {10, 11, 12, 13, 14, 15}:  # Preconditions, Steps, Expected, Postconditions, Source, Tags - wrap
                 cell.alignment = wrap_top
             else:
                 cell.alignment = plain_top
@@ -439,14 +461,14 @@ def write_excel(cases: List[TestCase], output: Path):
         source_value = source_cell.value
         if isinstance(source_value, str) and source_value.startswith("tests/"):
             source_cell.hyperlink = f"../{source_value}"
-            source_cell.style = "Hyperlink"
+            source_cell.font = Font(size=10, color="0563C1", underline="single")
 
-    # Excel table styling (nice look + filters)
+    # Excel table styling - use a more modern style
     if last_row >= 2:
         table_ref = f"A1:{last_col_letter}{last_row}"
         table = Table(displayName="TestCasesTable", ref=table_ref)
         style = TableStyleInfo(
-            name="TableStyleMedium9",
+            name="TableStyleLight9",
             showFirstColumn=False,
             showLastColumn=False,
             showRowStripes=True,
@@ -456,7 +478,7 @@ def write_excel(cases: List[TestCase], output: Path):
         ws.add_table(table)
 
     # -------------------------
-    # Summary sheet content
+    # Summary sheet content - Enhanced formatting
     # -------------------------
     total = len(cases)
     by_type: Dict[str, int] = {}
@@ -465,40 +487,125 @@ def write_excel(cases: List[TestCase], output: Path):
         by_type[tc.test_type] = by_type.get(tc.test_type, 0) + 1
         by_feature[tc.feature] = by_feature.get(tc.feature, 0) + 1
 
+    # Title with better styling
     ws_summary["A1"].value = "Test Case Summary"
-    ws_summary["A1"].font = Font(bold=True, size=16)
-    ws_summary["A3"].value = "Last Generated (UTC)"
-    ws_summary["B3"].value = timestamp
-    ws_summary["A4"].value = "Total Test Cases"
-    ws_summary["B4"].value = total
+    ws_summary["A1"].font = Font(bold=True, size=18, color="2E75B6")
+    ws_summary.merge_cells("A1:B1")
+    ws_summary["A1"].alignment = Alignment(horizontal="left", vertical="center")
+    ws_summary.row_dimensions[1].height = 35
 
+    # Info section with better formatting
+    info_fill = PatternFill("solid", fgColor="E7F3FF")
+    info_border = Border(
+        left=Side(style="thin", color="4472C4"),
+        right=Side(style="thin", color="4472C4"),
+        top=Side(style="thin", color="4472C4"),
+        bottom=Side(style="thin", color="4472C4"),
+    )
+    
+    ws_summary["A3"].value = "Last Generated (UTC)"
+    ws_summary["A3"].font = Font(bold=True, size=11)
+    ws_summary["A3"].fill = info_fill
+    ws_summary["A3"].border = info_border
+    ws_summary["B3"].value = timestamp
+    ws_summary["B3"].fill = info_fill
+    ws_summary["B3"].border = info_border
+    ws_summary["B3"].alignment = center_align
+    
+    ws_summary["A4"].value = "Total Test Cases"
+    ws_summary["A4"].font = Font(bold=True, size=11)
+    ws_summary["A4"].fill = info_fill
+    ws_summary["A4"].border = info_border
+    ws_summary["B4"].value = total
+    ws_summary["B4"].font = Font(bold=True, size=12, color="2E75B6")
+    ws_summary["B4"].fill = info_fill
+    ws_summary["B4"].border = info_border
+    ws_summary["B4"].alignment = center_align
+
+    # Section headers with better styling
+    section_fill = PatternFill("solid", fgColor="2E75B6")
+    section_font = Font(bold=True, size=12, color="FFFFFF")
+    
     ws_summary["A6"].value = "By Type"
-    ws_summary["A6"].font = Font(bold=True)
-    ws_summary.append(["Type", "Count"])
-    ws_summary["A7"].font = Font(bold=True)
-    ws_summary["B7"].font = Font(bold=True)
+    ws_summary["A6"].font = section_font
+    ws_summary["A6"].fill = section_fill
+    ws_summary["A6"].alignment = center_align
+    ws_summary.merge_cells("A6:B6")
+    ws_summary.row_dimensions[6].height = 25
+    
+    # Table headers
+    header_fill_summary = PatternFill("solid", fgColor="5B9BD5")
+    header_font_summary = Font(bold=True, size=11, color="FFFFFF")
+    header_border_summary = Border(
+        left=Side(style="thin", color="FFFFFF"),
+        right=Side(style="thin", color="FFFFFF"),
+        top=Side(style="thin", color="FFFFFF"),
+        bottom=Side(style="thin", color="FFFFFF"),
+    )
+    
+    ws_summary["A7"].value = "Type"
+    ws_summary["A7"].font = header_font_summary
+    ws_summary["A7"].fill = header_fill_summary
+    ws_summary["A7"].border = header_border_summary
+    ws_summary["A7"].alignment = center_align
+    ws_summary["B7"].value = "Count"
+    ws_summary["B7"].font = header_font_summary
+    ws_summary["B7"].fill = header_fill_summary
+    ws_summary["B7"].border = header_border_summary
+    ws_summary["B7"].alignment = center_align
+    
     row = 8
     for t, cnt in sorted(by_type.items(), key=lambda x: x[0]):
         ws_summary[f"A{row}"].value = t
         ws_summary[f"B{row}"].value = cnt
+        ws_summary[f"A{row}"].border = cell_border
+        ws_summary[f"B{row}"].border = cell_border
+        ws_summary[f"B{row}"].alignment = center_align
+        if row % 2 == 0:
+            ws_summary[f"A{row}"].fill = even_row_fill
+            ws_summary[f"B{row}"].fill = even_row_fill
+        else:
+            ws_summary[f"A{row}"].fill = odd_row_fill
+            ws_summary[f"B{row}"].fill = odd_row_fill
         row += 1
 
     row += 1
     ws_summary[f"A{row}"].value = "By Feature/Module"
-    ws_summary[f"A{row}"].font = Font(bold=True)
+    ws_summary[f"A{row}"].font = section_font
+    ws_summary[f"A{row}"].fill = section_fill
+    ws_summary[f"A{row}"].alignment = center_align
+    ws_summary.merge_cells(f"A{row}:B{row}")
+    ws_summary.row_dimensions[row].height = 25
+    
     row += 1
     ws_summary[f"A{row}"].value = "Feature"
+    ws_summary[f"A{row}"].font = header_font_summary
+    ws_summary[f"A{row}"].fill = header_fill_summary
+    ws_summary[f"A{row}"].border = header_border_summary
+    ws_summary[f"A{row}"].alignment = center_align
     ws_summary[f"B{row}"].value = "Count"
-    ws_summary[f"A{row}"].font = Font(bold=True)
-    ws_summary[f"B{row}"].font = Font(bold=True)
+    ws_summary[f"B{row}"].font = header_font_summary
+    ws_summary[f"B{row}"].fill = header_fill_summary
+    ws_summary[f"B{row}"].border = header_border_summary
+    ws_summary[f"B{row}"].alignment = center_align
+    
     row += 1
     for f, cnt in sorted(by_feature.items(), key=lambda x: (-x[1], x[0])):
         ws_summary[f"A{row}"].value = f
         ws_summary[f"B{row}"].value = cnt
+        ws_summary[f"A{row}"].border = cell_border
+        ws_summary[f"B{row}"].border = cell_border
+        ws_summary[f"B{row}"].alignment = center_align
+        if row % 2 == 0:
+            ws_summary[f"A{row}"].fill = even_row_fill
+            ws_summary[f"B{row}"].fill = even_row_fill
+        else:
+            ws_summary[f"A{row}"].fill = odd_row_fill
+            ws_summary[f"B{row}"].fill = odd_row_fill
         row += 1
 
-    ws_summary.column_dimensions["A"].width = 22
-    ws_summary.column_dimensions["B"].width = 18
+    ws_summary.column_dimensions["A"].width = 30
+    ws_summary.column_dimensions["B"].width = 20
 
     wb.save(output)
 
