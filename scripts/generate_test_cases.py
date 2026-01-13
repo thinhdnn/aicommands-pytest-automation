@@ -31,6 +31,7 @@ class TestCase:
         test_type: str,
         source: str,
         markers: List[str],
+        title: Optional[str] = None,
     ):
         self.tc_id: Optional[str] = tc_id  # Will be assigned as TC-xxxx format during Excel generation
         self.feature = feature
@@ -38,6 +39,7 @@ class TestCase:
         self.test_type = test_type
         self.source = source
         self.markers = markers
+        self.title = title  # Extracted from function docstring
         self.steps: List[TestStep] = []
 
 
@@ -65,6 +67,11 @@ class TestVisitor(ast.NodeVisitor):
         test_type = "UI" if "ui" in markers else "API"
         feature = markers[1] if len(markers) > 1 else "generated"
 
+        # Extract docstring from function if available
+        title = ast.get_docstring(node)
+        if title:
+            title = title.strip()
+
         # TC_ID will be assigned later in write_excel based on TC-xxxx format
         # Use temporary identifier based on source + scenario for matching
         tc_id = None  # Will be assigned during Excel generation
@@ -83,6 +90,7 @@ class TestVisitor(ast.NodeVisitor):
             test_type=test_type,
             source=str(relative_source),
             markers=markers,
+            title=title,
         )
 
         self.generic_visit(node)
@@ -434,7 +442,11 @@ def write_excel(cases: List[TestCase], output: Path):
         
         steps = "\n".join(f"{i+1}. {s.action}" for i, s in enumerate(tc.steps))
         expected = "\n".join(f"{i+1}. {s.expected}" for i, s in enumerate(tc.steps))
-        title = tc.scenario.replace("_", " ").strip().title()
+        # Use docstring title if available, otherwise convert function name to title case
+        if tc.title:
+            title = tc.title
+        else:
+            title = tc.scenario.replace("_", " ").strip().title()
 
         # Display as `tests/...` while keeping it relative (not absolute)
         automation_source_display = f"tests/{tc.source}"
