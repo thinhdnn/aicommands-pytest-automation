@@ -44,6 +44,18 @@ class FluentAssertion:
         """Assert that element should be disabled"""
         expect(self.locator).to_be_disabled(timeout=timeout)
         return self
+    
+    def should_have_displayed_text(self, expected_text: str, timeout: int = 10000) -> 'FluentAssertion':
+        """Assert that element should have specific displayed text (inner_text, after CSS transforms)"""
+        actual_text = self.locator.inner_text(timeout=timeout).strip()
+        assert actual_text == expected_text, f"Expected displayed text '{expected_text}', but got '{actual_text}'"
+        return self
+    
+    def should_contain_displayed_text(self, text: str, timeout: int = 10000) -> 'FluentAssertion':
+        """Assert that element should contain specific displayed text (inner_text, after CSS transforms)"""
+        actual_text = self.locator.inner_text(timeout=timeout).strip()
+        assert text in actual_text, f"Expected displayed text to contain '{text}', but got '{actual_text}'"
+        return self
 
 
 class FluentAction:
@@ -68,6 +80,35 @@ class FluentAction:
         # Fallback to the first for debuggability if none matched
         return selector[0]
     
+    def _find_element_by_displayed_text(self, base_selector: Union[str, List[str]], displayed_text: str, timeout: int = 10000) -> Locator:
+        """Find element by displayed text (inner_text, after CSS transforms).
+        Searches through all elements matching base_selector and returns the first one
+        whose inner_text matches the displayed_text.
+        """
+        # Resolve base selector first
+        if isinstance(base_selector, list):
+            base_sel = self._resolve_selector(base_selector, timeout=min(3000, timeout), state="attached")
+        else:
+            base_sel = base_selector
+        
+        # Get all matching elements
+        elements = self.page.locator(base_sel).all()
+        
+        # Search for element with matching displayed text
+        for element in elements:
+            try:
+                # Wait for element to be visible
+                element.wait_for(state="visible", timeout=2000)
+                # Check inner_text (displayed text after CSS)
+                actual_text = element.inner_text().strip()
+                if actual_text == displayed_text:
+                    return element
+            except Exception:
+                continue
+        
+        # If not found, raise error with helpful message
+        raise Exception(f"Element with displayed text '{displayed_text}' not found using selector '{base_sel}'")
+    
     def navigate_to(self, url: str) -> 'FluentAction':
         """Navigate to specified URL"""
         self.page.goto(url)
@@ -82,11 +123,67 @@ class FluentAction:
         self.steps.append(step_desc)
         return self
     
+    def fill_field_by_label_displayed_text(self, base_selector: Union[str, List[str]], label_displayed_text: str, value: str, description: str = "") -> 'FluentAction':
+        """Fill input field by finding label with displayed text, then finding associated input.
+        Useful when label text differs from DOM text due to CSS transforms.
+        Tries common patterns: following-sibling input, parent input, or input with matching aria-labelledby.
+        """
+        # Find label by displayed text
+        label_element = self._find_element_by_displayed_text(base_selector, label_displayed_text)
+        
+        # Try to find associated input using common patterns
+        filled = False
+        # Pattern 1: Input as following sibling
+        try:
+            input_locator = label_element.locator("xpath=following-sibling::input").first
+            if input_locator.is_visible(timeout=1000):
+                input_locator.fill(value)
+                filled = True
+        except Exception:
+            pass
+        
+        if not filled:
+            # Pattern 2: Input in following sibling div
+            try:
+                input_locator = label_element.locator("xpath=following-sibling::div//input").first
+                if input_locator.is_visible(timeout=1000):
+                    input_locator.fill(value)
+                    filled = True
+            except Exception:
+                pass
+        
+        if not filled:
+            # Pattern 3: Input in parent container
+            try:
+                input_locator = label_element.locator("xpath=ancestor::*//input[1]").first
+                if input_locator.is_visible(timeout=1000):
+                    input_locator.fill(value)
+                    filled = True
+            except Exception:
+                pass
+        
+        if not filled:
+            raise Exception(f"Could not find input field associated with label '{label_displayed_text}'")
+        
+        step_desc = description or f"Filled field with label '{label_displayed_text}' with value '{value}'"
+        self.steps.append(step_desc)
+        return self
+    
     def click_element(self, selector: Union[str, List[str]], description: str = "") -> 'FluentAction':
         """Click on element"""
         resolved = self._resolve_selector(selector)
         self.page.click(resolved)
         step_desc = description or f"Clicked element {resolved}"
+        self.steps.append(step_desc)
+        return self
+    
+    def click_element_by_displayed_text(self, base_selector: Union[str, List[str]], displayed_text: str, description: str = "") -> 'FluentAction':
+        """Click on element by displayed text (inner_text, after CSS transforms).
+        Useful when DOM text differs from displayed text due to CSS transforms.
+        """
+        element = self._find_element_by_displayed_text(base_selector, displayed_text)
+        element.click()
+        step_desc = description or f"Clicked element with displayed text '{displayed_text}'"
         self.steps.append(step_desc)
         return self
     
@@ -117,6 +214,14 @@ class FluentAction:
         resolved = self._resolve_selector(selector)
         self.page.hover(resolved)
         step_desc = description or f"Hovered over {resolved}"
+        self.steps.append(step_desc)
+        return self
+    
+    def hover_element_by_displayed_text(self, base_selector: Union[str, List[str]], displayed_text: str, description: str = "") -> 'FluentAction':
+        """Hover over element by displayed text (inner_text, after CSS transforms)"""
+        element = self._find_element_by_displayed_text(base_selector, displayed_text)
+        element.hover()
+        step_desc = description or f"Hovered over element with displayed text '{displayed_text}'"
         self.steps.append(step_desc)
         return self
     
@@ -160,6 +265,14 @@ class FluentValidator:
             locator = self.page.locator(selector[0])
         else:
             locator = self.page.locator(selector)
+        return FluentAssertion(locator, description)
+    
+    def element_by_displayed_text(self, base_selector: Union[str, List[str]], displayed_text: str, description: str = "") -> FluentAssertion:
+        """Get fluent assertion for element by displayed text (inner_text, after CSS transforms).
+        Useful when DOM text differs from displayed text due to CSS transforms.
+        """
+        action = FluentAction(self.page)
+        locator = action._find_element_by_displayed_text(base_selector, displayed_text)
         return FluentAssertion(locator, description)
     
     def url_should_contain(self, text: str) -> 'FluentValidator':
