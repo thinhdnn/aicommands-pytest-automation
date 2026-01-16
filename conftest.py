@@ -13,7 +13,7 @@ pytest_plugins = [
 
 
 @pytest.fixture(scope="session")
-def browser_type_launch_args(browser_type_launch_args, environment_config):
+def browser_type_launch_args(browser_type_launch_args, environment_config, browser_name):
     """Configure browser launch arguments including slow_mo"""
     browser_config = environment_config.browser_config
     
@@ -23,6 +23,20 @@ def browser_type_launch_args(browser_type_launch_args, environment_config):
         "slow_mo": browser_config.get("slow_mo", 0)
     }
     
+    extra_args = []
+    if browser_name == "chromium":
+        extra_args = list(browser_config.get("chromium_args", []))
+    elif browser_name == "firefox":
+        extra_args = browser_config.get("firefox_args", [])
+
+    if browser_config.get("auto_maximize") and browser_name == "chromium":
+        if "--start-maximized" not in extra_args:
+            extra_args.append("--start-maximized")
+
+    if extra_args:
+        base_args = launch_args.get("args", [])
+        launch_args["args"] = [*base_args, *extra_args]
+
     return launch_args
 
 
@@ -31,9 +45,10 @@ def browser_context_args(browser_context_args, environment_config):
     """Configure browser context with master environment settings"""
     browser_config = environment_config.browser_config  # Single source from environment.json
 
+    viewport = environment_config.viewport
     context_args = {
         **browser_context_args,
-        "viewport": environment_config.viewport,  # No duplicate - from master config
+        "viewport": viewport,  # No duplicate - from master config
         "ignore_https_errors": browser_config.get("ignore_https_errors", True),
         "permissions": browser_config.get("permissions", []),
         "locale": browser_config.get("locale", "en-US"),
@@ -43,7 +58,8 @@ def browser_context_args(browser_context_args, environment_config):
     # Video recording from master config
     if browser_config.get("video_recording"):
         context_args["record_video_dir"] = "reports/videos/"
-        context_args["record_video_size"] = environment_config.viewport
+        if viewport:
+            context_args["record_video_size"] = viewport
         
     return context_args
 
@@ -53,6 +69,10 @@ def page_setup(request, environment_config):
     """Setup page with master config timeouts and settings (only for UI tests)"""
     if request.node.get_closest_marker("ui"):
         page = request.getfixturevalue("page")
+        # Ensure viewport matches the actual screen size when auto maximize is enabled.
+        if environment_config.browser_config.get("auto_maximize"):
+            screen_size = page.evaluate("() => ({ width: screen.width, height: screen.height })")
+            page.set_viewport_size(screen_size)
         page.set_default_timeout(environment_config.get_timeout("default"))
         page._base_url = environment_config.base_url
         yield page

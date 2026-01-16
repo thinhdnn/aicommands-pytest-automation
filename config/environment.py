@@ -3,7 +3,7 @@ Environment configuration manager
 """
 import os
 import json
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 
 class EnvironmentConfig:
@@ -73,9 +73,11 @@ class EnvironmentConfig:
                               }))
 
     @property 
-    def viewport(self) -> Dict[str, int]:
-        """Get viewport settings"""
+    def viewport(self) -> Optional[Dict[str, int]]:
+        """Get viewport settings (None means auto-size to window)"""
         browser_config = self.browser_config
+        if browser_config.get("auto_maximize"):
+            return None
         return browser_config.get("viewport", {"width": 1920, "height": 1080})
 
     @property
